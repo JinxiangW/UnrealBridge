@@ -1566,7 +1566,10 @@ FString UUnrealBridgeMaterialLibrary::GetMaterialGraphJson(
 		const FString FullJson = SerializeJsonObject(FullResult);
 		const FString FinalPath = ResolveOutputPath(Options.OutputPath);
 		IFileManager::Get().MakeDirectory(*FPaths::GetPath(FinalPath), true);
-		if (!FFileHelper::SaveStringToFile(FullJson, *FinalPath))
+		if (!FFileHelper::SaveStringToFile(
+			FullJson,
+			*FinalPath,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 		{
 			return SerializeJsonObject(ErrorJson(
 				MaterialPath,

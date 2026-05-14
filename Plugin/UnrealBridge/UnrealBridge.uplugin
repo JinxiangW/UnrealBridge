@@ -32,19 +32,28 @@
 		},
 		{
 			"Name": "PoseSearch",
-			"Enabled": true
+			"Enabled": false,
+			"Optional": true
 		},
 		{
 			"Name": "Chooser",
-			"Enabled": true
+			"Enabled": false,
+			"Optional": true
 		},
 		{
 			"Name": "GeometryScripting",
-			"Enabled": true
+			"Enabled": false,
+			"Optional": true
 		},
 		{
 			"Name": "PCG",
-			"Enabled": true
+			"Enabled": false,
+			"Optional": true
+		},
+		{
+			"Name": "StructUtils",
+			"Enabled": false,
+			"Optional": true
 		}
 	]
 }

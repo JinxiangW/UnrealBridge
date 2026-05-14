@@ -58,24 +58,6 @@ public class UnrealBridge : ModuleRules
 			"ImageWrapper",
 			"RenderCore",
 			"RHI",
-			"MaterialEditor",
-			"PoseSearch",
-			"Chooser",
-			"ChooserEditor",
-			"StructUtils",
-			// Geometry Script — Lane 2 of the procedural-content roadmap
-			// (UnrealBridgeGeometryLibrary). UDynamicMesh + the runtime BP
-			// function libs (CopyMeshFromStaticMesh, ApplyMeshBoolean, etc.)
-			// live in GeometryScriptingCore / GeometryFramework; the editor-
-			// only asset-creation lib (CreateNewStaticMeshAssetFromMesh) is
-			// in GeometryScriptingEditor — UnrealBridge is editor-only so
-			// linking the editor module is fine.
-			"GeometryScriptingCore",
-			"GeometryFramework",
-			"GeometryScriptingEditor",
-			// PCG — Lane 3 of the procedural-content roadmap. Read-only +
-			// trigger only (we do not edit PCG graphs — see roadmap §5/§8).
-			"PCG",
 			// TraceLog hosts UE::Trace::EnumerateChannels (used by M4-4
 			// list_trace_channels). Core publicly forwards TraceLog headers
 			// but the symbols are __declspec(dllimport) so a direct link
@@ -88,6 +70,22 @@ public class UnrealBridge : ModuleRules
 			// (synchronous). Pulls in TraceAnalysis transitively.
 			"TraceServices",
 		});
+
+		if (Target.Version.MajorVersion > 5 || (Target.Version.MajorVersion == 5 && Target.Version.MinorVersion >= 7))
+		{
+			PrivateDependencyModuleNames.AddRange(new string[]
+			{
+				"MaterialEditor",
+				"PoseSearch",
+				"Chooser",
+				"ChooserEditor",
+				"StructUtils",
+				"GeometryScriptingCore",
+				"GeometryFramework",
+				"GeometryScriptingEditor",
+				"PCG",
+			});
+		}
 
 		// Live Coding is a Windows-only editor module. Guard the dep so
 		// non-Windows builds of this editor plugin don't fail to link.
