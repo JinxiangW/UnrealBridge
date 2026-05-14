@@ -965,6 +965,23 @@ public:
 	static FBridgeMaterialGraph GetMaterialGraph(const FString& MaterialPath);
 
 	/**
+	 * Read-only material graph JSON backend for the Python get_material_graph(...) wrapper.
+	 *
+	 * OptionsJson fields:
+	 *   mode: summary | full | node | subgraph
+	 *   node_guid, property_name, max_depth, output_path
+	 *   include_pins, include_properties, include_captions, include_adjacency, include_custom_code
+	 *   stable_order, max_nodes, max_bytes
+	 *
+	 * This is intentionally JSON-first so large graph reads can return summary/export
+	 * metadata without inflating USTRUCT arrays through UE Python.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Material")
+	static FString GetMaterialGraphJson(
+		const FString& MaterialPath,
+		const FString& OptionsJson);
+
+	/**
 	 * M1-3: Shader-level statistics for a compiled Material — per-variant instruction counts,
 	 * VT stack count, feature level + quality — plus the current set of compile errors (M1-4
 	 * overlap).

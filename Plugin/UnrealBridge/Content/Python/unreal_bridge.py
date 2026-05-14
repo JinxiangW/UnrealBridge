@@ -14,6 +14,7 @@ hallucinations against bridge APIs — kwargs make the contract
 structural rather than mnemonic.
 """
 
+import json
 import unreal
 
 _GENERATED_AT = '2026-05-08T17:13:50+00:00'
@@ -4416,9 +4417,48 @@ class Material:
         return unreal.UnrealBridgeMaterialLibrary.get_material_function(function_path)
 
     @staticmethod
-    def get_material_graph(*, material_path):
-        """X.get_material_graph(material_path) -> BridgeMaterialGraph"""
-        return unreal.UnrealBridgeMaterialLibrary.get_material_graph(material_path)
+    def get_material_graph(
+        *,
+        material_path,
+        mode="summary",
+        node_guid=None,
+        property_name=None,
+        max_depth=0,
+        output_path=None,
+        include_pins=True,
+        include_properties=True,
+        include_adjacency=False,
+        include_custom_code=False,
+        include_captions=True,
+        stable_order=True,
+        max_nodes=0,
+        max_bytes=0,
+    ):
+        """X.get_material_graph(material_path, mode='summary', ...) -> dict"""
+        options = {
+            "mode": mode,
+            "node_guid": node_guid or "",
+            "property_name": property_name or "",
+            "max_depth": max_depth,
+            "output_path": output_path or "",
+            "include_pins": include_pins,
+            "include_properties": include_properties,
+            "include_adjacency": include_adjacency,
+            "include_custom_code": include_custom_code,
+            "include_captions": include_captions,
+            "stable_order": stable_order,
+            "max_nodes": max_nodes,
+            "max_bytes": max_bytes,
+        }
+        raw = unreal.UnrealBridgeMaterialLibrary.get_material_graph_json(
+            material_path, json.dumps(options, ensure_ascii=False)
+        )
+        return json.loads(raw)
+
+    @staticmethod
+    def get_material_graph_json(*, material_path, options_json):
+        """X.get_material_graph_json(material_path, options_json) -> str"""
+        return unreal.UnrealBridgeMaterialLibrary.get_material_graph_json(material_path, options_json)
 
     @staticmethod
     def get_material_info(*, material_path):

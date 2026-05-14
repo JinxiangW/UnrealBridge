@@ -413,6 +413,8 @@ def _cli() -> int:
         print(f"ERROR: no JSON line in script output:\n{manifest_text[:500]}", file=sys.stderr)
         return 1
 
+    _apply_manifest_overrides(last_json)
+
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(last_json, f, indent=2, ensure_ascii=False, sort_keys=True)
@@ -462,6 +464,44 @@ def _cli() -> int:
 
 # ── Wrapper module generation (offline; reads manifest, emits Python) ──────
 
+def _apply_manifest_overrides(manifest: dict) -> None:
+    """Patch Python-wrapper contracts that intentionally differ from raw UFUNCTIONs."""
+    funcs = (
+        manifest.get("libraries", {})
+        .get("UnrealBridgeMaterialLibrary", {})
+        .get("functions", {})
+    )
+    if "get_material_graph" in funcs:
+        funcs["get_material_graph"] = {
+            "doc": "X.get_material_graph(material_path, mode='summary', ...) -> dict",
+            "params": [
+                {"name": "material_path", "type": "", "has_default": False, "default": None},
+                {"name": "mode", "type": "", "has_default": True, "default": '"summary"'},
+                {"name": "node_guid", "type": "", "has_default": True, "default": "None"},
+                {"name": "property_name", "type": "", "has_default": True, "default": "None"},
+                {"name": "max_depth", "type": "", "has_default": True, "default": "0"},
+                {"name": "output_path", "type": "", "has_default": True, "default": "None"},
+                {"name": "include_pins", "type": "", "has_default": True, "default": "True"},
+                {"name": "include_properties", "type": "", "has_default": True, "default": "True"},
+                {"name": "include_adjacency", "type": "", "has_default": True, "default": "False"},
+                {"name": "include_custom_code", "type": "", "has_default": True, "default": "False"},
+                {"name": "include_captions", "type": "", "has_default": True, "default": "True"},
+                {"name": "stable_order", "type": "", "has_default": True, "default": "True"},
+                {"name": "max_nodes", "type": "", "has_default": True, "default": "0"},
+                {"name": "max_bytes", "type": "", "has_default": True, "default": "0"},
+            ],
+            "returns": "dict",
+        }
+    funcs.setdefault("get_material_graph_json", {
+        "doc": "X.get_material_graph_json(material_path, options_json) -> str",
+        "params": [
+            {"name": "material_path", "type": "", "has_default": False, "default": None},
+            {"name": "options_json", "type": "", "has_default": False, "default": None},
+        ],
+        "returns": "str",
+    })
+
+
 def _generate_wrapper(manifest: dict) -> "tuple[str, dict]":
     """Emit the kwargs-only wrapper module source from the manifest.
 
@@ -485,6 +525,7 @@ def _generate_wrapper(manifest: dict) -> "tuple[str, dict]":
     out.append("structural rather than mnemonic.")
     out.append('"""')
     out.append("")
+    out.append("import json")
     out.append("import unreal")
     out.append("")
     out.append(f"_GENERATED_AT = {manifest.get('generated_at', '?')!r}")
@@ -570,6 +611,49 @@ def _generate_wrapper(manifest: dict) -> "tuple[str, dict]":
             if extra_notes:
                 doc = doc.rstrip() + "  " + " ".join(extra_notes)
 
+            if qualname == "UnrealBridgeMaterialLibrary.get_material_graph":
+                out.append("    @staticmethod")
+                out.append("    def get_material_graph(")
+                out.append("        *,")
+                out.append("        material_path,")
+                out.append("        mode=\"summary\",")
+                out.append("        node_guid=None,")
+                out.append("        property_name=None,")
+                out.append("        max_depth=0,")
+                out.append("        output_path=None,")
+                out.append("        include_pins=True,")
+                out.append("        include_properties=True,")
+                out.append("        include_adjacency=False,")
+                out.append("        include_custom_code=False,")
+                out.append("        include_captions=True,")
+                out.append("        stable_order=True,")
+                out.append("        max_nodes=0,")
+                out.append("        max_bytes=0,")
+                out.append("    ):")
+                out.append("        \"\"\"X.get_material_graph(material_path, mode='summary', ...) -> dict\"\"\"")
+                out.append("        options = {")
+                out.append("            \"mode\": mode,")
+                out.append("            \"node_guid\": node_guid or \"\",")
+                out.append("            \"property_name\": property_name or \"\",")
+                out.append("            \"max_depth\": max_depth,")
+                out.append("            \"output_path\": output_path or \"\",")
+                out.append("            \"include_pins\": include_pins,")
+                out.append("            \"include_properties\": include_properties,")
+                out.append("            \"include_adjacency\": include_adjacency,")
+                out.append("            \"include_custom_code\": include_custom_code,")
+                out.append("            \"include_captions\": include_captions,")
+                out.append("            \"stable_order\": stable_order,")
+                out.append("            \"max_nodes\": max_nodes,")
+                out.append("            \"max_bytes\": max_bytes,")
+                out.append("        }")
+                out.append("        raw = unreal.UnrealBridgeMaterialLibrary.get_material_graph_json(")
+                out.append("            material_path, json.dumps(options, ensure_ascii=False)")
+                out.append("        )")
+                out.append("        return json.loads(raw)")
+                out.append("")
+                n_methods += 1
+                continue
+
             out.append("    @staticmethod")
             if params:
                 out.append(f"    def {fn_name}(*, {', '.join(sig_parts)}):")
@@ -602,7 +686,8 @@ def _short_name(lib_name: str) -> str:
 
 # ── Entry point ────────────────────────────────────────────────────────────
 
-if _IN_UE:
-    print(json.dumps(_build_manifest_in_ue(), ensure_ascii=False))
-else:
-    sys.exit(_cli())
+if __name__ == "__main__":
+    if _IN_UE:
+        print(json.dumps(_build_manifest_in_ue(), ensure_ascii=False))
+    else:
+        sys.exit(_cli())

@@ -266,7 +266,113 @@ for vp in info.vector_parameters:
 
 ---
 
-## get_material_graph(material_path) -> FBridgeMaterialGraph
+## get_material_graph(material_path, mode="summary", ...) -> dict
+
+**M1-2.** Single read-only Python wrapper entry point for material graph inspection.
+Default `mode="summary"` returns counts and output wiring only. Use
+`mode="full"` for the complete graph, `mode="node"` for one node plus adjacent
+edges, or `mode="subgraph"` to trace upstream from one material property.
+
+```python
+from unreal_bridge import Material
+
+summary = Material.get_material_graph(material_path="/Game/Materials/M_MyMaster")
+full = Material.get_material_graph(material_path="/Game/Materials/M_MyMaster", mode="full")
+base_color = Material.get_material_graph(
+    material_path="/Game/Materials/M_MyMaster",
+    mode="subgraph",
+    property_name="BaseColor",
+)
+
+# Large graph: write selected JSON to disk and return only export metadata.
+exported = Material.get_material_graph(
+    material_path="/Game/Materials/M_MyMaster",
+    mode="full",
+    output_path="M_MyMaster.graph.json",
+)
+```
+
+Parameters:
+
+| Param | Default | Description |
+|---|---:|---|
+| `mode` | `"summary"` | `summary`, `full`, `node`, or `subgraph` |
+| `node_guid` | `None` | Required for `mode="node"`; accepts preferred `node_id` (`n42`) or legacy `expression_guid` |
+| `property_name` | `None` | Required for `mode="subgraph"`; e.g. `BaseColor`, `Normal` |
+| `max_depth` | `0` | Upstream traversal depth for subgraph; `0` means unlimited |
+| `output_path` | `None` | Writes the selected result JSON to file and returns summary metadata |
+| `include_pins` | `True` | Include node input/output pin arrays |
+| `include_properties` | `True` | Include typed node properties |
+| `include_captions` | `True` | Include node captions from `GetCaption()` |
+| `include_adjacency` | `False` | Include `adjacency.by_source/by_target` |
+| `include_custom_code` | `False` | Include full Custom node HLSL code; otherwise only code length |
+| `max_nodes` / `max_bytes` | `0` | Inline result guards; exceeded results return summary with `truncated=true` |
+
+Top-level result fields: `schema_version`, `success`, `mode`, `asset_type`,
+`requested_path`, `path`, `resolved_graph_path`, `base_material_path`,
+`is_material_instance`, `material`, `summary`, `nodes`, `connections`,
+`property_connections`, `function_interface`, `truncated`, `warnings`.
+
+Schema v2 separates identity from UE's authored expression GUID:
+
+- `node_id`: unique within this graph snapshot; use this to join nodes and edges.
+- `expression_guid`: original `MaterialExpressionGuid`; may be duplicated in authored assets.
+- `guid`: compatibility alias for `expression_guid`; do not treat it as unique.
+
+`nodes[]` describes graph nodes. Each node contains `node_id`,
+`expression_guid`, `guid`, `class`, `name`, `caption`, `desc`, `pos`,
+`inputs[]`, `outputs[]`, and typed `properties`. Pins contain `pin_id`,
+`name`, `index`, `type`, `default_value`, and `connection_ids`. Pin IDs are
+based on `node_id`.
+
+`connections[]` describes expression-to-expression edges:
+
+```json
+{
+  "id": "c0",
+  "source_node_id": "n12",
+  "source_expression_guid": "...",
+  "source_guid": "...",
+  "source_pin": "n12:out:0",
+  "source_output": "RGB",
+  "source_output_index": 0,
+  "target_node_id": "n34",
+  "target_expression_guid": "...",
+  "target_guid": "...",
+  "target_pin": "n34:in:1",
+  "target_input": "Base",
+  "target_input_index": 1,
+  "kind": "expression"
+}
+```
+
+`property_connections[]` describes roots into material outputs:
+
+```json
+{
+  "id": "p0",
+  "property": "BaseColor",
+  "source_node_id": "n12",
+  "source_expression_guid": "...",
+  "source_guid": "...",
+  "source_pin": "n12:out:0",
+  "source_output": "RGB",
+  "source_output_index": 0,
+  "target_kind": "material_property"
+}
+```
+
+Notes:
+- Reconstruct the graph from `nodes`, `connections`, and `property_connections` together. `nodes` alone is only a node inventory.
+- Join graph edges by `source_node_id` / `target_node_id`; legacy `source_guid` / `target_guid` can be ambiguous when UE assets contain duplicate `MaterialExpressionGuid` values.
+- `summary.duplicate_expression_guid_count` and `summary.duplicate_expression_guids[]` report duplicated authored GUIDs when present.
+- `UMaterialInstance` paths resolve to their base material graph and set `is_material_instance=true`.
+- `UMaterialFunction` paths return `function_interface.inputs/outputs`; material property connections are empty.
+- For large materials, prefer `mode="summary"`, `mode="subgraph"`, or `output_path` instead of inline `mode="full"`.
+
+---
+
+## Legacy raw get_material_graph(material_path) -> FBridgeMaterialGraph
 
 **M1-2.** The full expression graph for a `UMaterial` or `UMaterialFunction`: every node with its class, position, caption, pin names, and key properties, plus every wire between expressions, plus — for `UMaterial` — the main-property wiring (BaseColor / Metallic / Normal / WorldPositionOffset / ...).
 

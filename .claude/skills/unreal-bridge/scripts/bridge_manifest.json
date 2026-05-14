@@ -16558,16 +16558,112 @@
           "returns": "BridgeMaterialFunctionInfo"
         },
         "get_material_graph": {
-          "doc": "X.get_material_graph(material_path) -> BridgeMaterialGraph",
+          "doc": "X.get_material_graph(material_path, mode='summary', ...) -> dict",
           "params": [
             {
               "default": null,
               "has_default": false,
               "name": "material_path",
               "type": ""
+            },
+            {
+              "default": "\"summary\"",
+              "has_default": true,
+              "name": "mode",
+              "type": ""
+            },
+            {
+              "default": "None",
+              "has_default": true,
+              "name": "node_guid",
+              "type": ""
+            },
+            {
+              "default": "None",
+              "has_default": true,
+              "name": "property_name",
+              "type": ""
+            },
+            {
+              "default": "0",
+              "has_default": true,
+              "name": "max_depth",
+              "type": ""
+            },
+            {
+              "default": "None",
+              "has_default": true,
+              "name": "output_path",
+              "type": ""
+            },
+            {
+              "default": "True",
+              "has_default": true,
+              "name": "include_pins",
+              "type": ""
+            },
+            {
+              "default": "True",
+              "has_default": true,
+              "name": "include_properties",
+              "type": ""
+            },
+            {
+              "default": "False",
+              "has_default": true,
+              "name": "include_adjacency",
+              "type": ""
+            },
+            {
+              "default": "False",
+              "has_default": true,
+              "name": "include_custom_code",
+              "type": ""
+            },
+            {
+              "default": "True",
+              "has_default": true,
+              "name": "include_captions",
+              "type": ""
+            },
+            {
+              "default": "True",
+              "has_default": true,
+              "name": "stable_order",
+              "type": ""
+            },
+            {
+              "default": "0",
+              "has_default": true,
+              "name": "max_nodes",
+              "type": ""
+            },
+            {
+              "default": "0",
+              "has_default": true,
+              "name": "max_bytes",
+              "type": ""
             }
           ],
-          "returns": "BridgeMaterialGraph"
+          "returns": "dict"
+        },
+        "get_material_graph_json": {
+          "doc": "X.get_material_graph_json(material_path, options_json) -> str",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "material_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "options_json",
+              "type": ""
+            }
+          ],
+          "returns": "str"
         },
         "get_material_info": {
           "doc": "X.get_material_info(material_path) -> BridgeMaterialInfo",
