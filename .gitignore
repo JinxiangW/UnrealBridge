@@ -50,3 +50,7 @@ __pycache__/
 tools/engines.local.json
 tools/build_engines/
 build_matrix_report.md
+
+# Unreal plugin local build outputs
+Plugin/UnrealBridge/Binaries/
+Plugin/UnrealBridge/Intermediate/
