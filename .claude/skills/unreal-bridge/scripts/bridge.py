@@ -83,7 +83,15 @@ AUDIT_LOG_NAME = "exec.log"
 
 # ── Resolution: turn CLI args into a (host, port, token, project_path) tuple ─
 
-def resolve_target(args) -> "tuple[str, int, str | None, str | None]":
+def _parse_endpoint(endpoint_str: str, *, source_name: str) -> "tuple[str, int]":
+    """Parse host:port coming from CLI / env and raise a user-facing error."""
+    if ":" not in endpoint_str:
+        raise SystemExit(f"{source_name} must be host:port (got {endpoint_str!r})")
+    host, port_s = endpoint_str.rsplit(":", 1)
+    return host, int(port_s)
+
+
+def resolve_target(args, *, ignore_env_endpoint: bool = False) -> "tuple[str, int, str | None, str | None]":
     """Figure out which editor to talk to.
 
     Returns (host, port, token, project_path). project_path is the .uproject
@@ -95,13 +103,18 @@ def resolve_target(args) -> "tuple[str, int, str | None, str | None]":
       2. UDP multicast discovery, filtered by --project (or UNREAL_BRIDGE_PROJECT)
     """
     # 1. Explicit endpoint — no discovery, no project_path.
-    endpoint_str = getattr(args, "endpoint", None) or os.environ.get("UNREAL_BRIDGE_ENDPOINT")
+    endpoint_str = getattr(args, "endpoint", None)
     if endpoint_str:
-        if ":" not in endpoint_str:
-            raise SystemExit(f"--endpoint must be host:port (got {endpoint_str!r})")
-        host, port_s = endpoint_str.rsplit(":", 1)
+        host, port = _parse_endpoint(endpoint_str, source_name="--endpoint")
         token = getattr(args, "token", None) or os.environ.get("UNREAL_BRIDGE_TOKEN")
-        return host, int(port_s), token, None
+        return host, port, token, None
+
+    if not ignore_env_endpoint:
+        endpoint_str = os.environ.get("UNREAL_BRIDGE_ENDPOINT")
+        if endpoint_str:
+            host, port = _parse_endpoint(endpoint_str, source_name="UNREAL_BRIDGE_ENDPOINT")
+            token = getattr(args, "token", None) or os.environ.get("UNREAL_BRIDGE_TOKEN")
+            return host, port, token, None
 
     # 2. Discovery.
     project = getattr(args, "project", None) or os.environ.get("UNREAL_BRIDGE_PROJECT") or "*"
@@ -446,6 +459,63 @@ def send_request(host: str, port: int, payload: dict, timeout: float,
         return json.loads(resp_data.decode("utf-8"))
 
 
+def _can_retry_via_discovery(args, exc: Exception) -> bool:
+    """Only env-pinned endpoints auto-fall back to discovery.
+
+    Rationale:
+      - `--endpoint` is an explicit user override: never second-guess it.
+      - `UNREAL_BRIDGE_ENDPOINT` is often long-lived process state. If the UE
+        editor restarted onto a new ephemeral port, retrying once via discovery
+        repairs the stale env value without user intervention.
+    """
+    if getattr(args, "endpoint", None):
+        return False
+    if not os.environ.get("UNREAL_BRIDGE_ENDPOINT"):
+        return False
+    return isinstance(
+        exc,
+        (
+            ConnectionRefusedError,
+            ConnectionError,
+            TimeoutError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ),
+    )
+
+
+def send_request_with_target(
+    args,
+    payload: dict,
+    timeout: float,
+    resolved_target: "tuple[str, int, str | None, str | None] | None" = None,
+) -> "tuple[dict, tuple[str, int, str | None, str | None]]":
+    """Resolve a target and send one request, with one stale-env fallback.
+
+    When the endpoint came from `UNREAL_BRIDGE_ENDPOINT` and the transport
+    fails, ignore that env var once and retry via normal UDP discovery.
+    """
+    target = resolved_target or resolve_target(args)
+    host, port, token, project_path = target
+    try:
+        return send_request(host, port, payload, timeout, token=token), target
+    except Exception as first_exc:
+        if not _can_retry_via_discovery(args, first_exc):
+            raise
+        try:
+            retry_target = resolve_target(args, ignore_env_endpoint=True)
+        except SystemExit:
+            raise first_exc
+        retry_host, retry_port, retry_token, _retry_project_path = retry_target
+        if (retry_host, retry_port) == (host, port):
+            raise
+        return (
+            send_request(retry_host, retry_port, payload, timeout, token=retry_token),
+            retry_target,
+        )
+
+
 def _recv_all(sock: socket.socket, num_bytes: int) -> bytes:
     chunks = []
     received = 0
@@ -461,10 +531,12 @@ def _recv_all(sock: socket.socket, num_bytes: int) -> bytes:
 # ── Commands ────────────────────────────────────────────────────────────
 
 def cmd_ping(args):
-    host, port, token, _project_path = resolve_target(args)
+    target = resolve_target(args)
+    host, port, _token, _project_path = target
     try:
         payload = {"id": str(uuid.uuid4()), "command": "ping"}
-        resp = send_request(host, port, payload, args.timeout, token=token)
+        resp, target = send_request_with_target(args, payload, args.timeout, resolved_target=target)
+        host, port, _token, _project_path = target
     except ConnectionRefusedError:
         if args.json:
             print(json.dumps({"success": False, "error": "Connection refused"}))
@@ -501,14 +573,18 @@ def cmd_ping(args):
 
 def cmd_gt_ping(args):
     """Probe whether the UE GameThread is responsive."""
-    host, port, token, _project_path = resolve_target(args)
+    target = resolve_target(args)
+    host, port, _token, _project_path = target
     payload = {
         "id": str(uuid.uuid4()),
         "command": "gamethread_ping",
         "timeout": args.probe_timeout,
     }
     try:
-        resp = send_request(host, port, payload, args.probe_timeout + 3.0, token=token)
+        resp, target = send_request_with_target(
+            args, payload, args.probe_timeout + 3.0, resolved_target=target
+        )
+        host, port, _token, _project_path = target
     except Exception as e:
         if args.json:
             print(json.dumps({"success": False, "error": str(e)}))
@@ -532,10 +608,12 @@ def cmd_gt_ping(args):
 
 
 def cmd_resume(args):
-    host, port, token, _project_path = resolve_target(args)
+    target = resolve_target(args)
+    host, port, _token, _project_path = target
     try:
         payload = {"id": str(uuid.uuid4()), "command": "debug_resume"}
-        resp = send_request(host, port, payload, args.timeout, token=token)
+        resp, target = send_request_with_target(args, payload, args.timeout, resolved_target=target)
+        host, port, _token, _project_path = target
     except Exception as e:
         if args.json:
             print(json.dumps({"success": False, "error": str(e)}))
@@ -579,12 +657,17 @@ def cmd_wait_compile(args):
         " 'ql': str(r.quality_level), 'err': str(r.error)}))\n"
     )
 
-    host, port, token, _project_path = resolve_target(args)
+    target = resolve_target(args)
+    host, port, token, _project_path = target
     last = None
     while _time.time() < deadline:
         payload = {"id": str(uuid.uuid4()), "script": code, "timeout": 5}
         try:
-            resp = send_request(host, port, payload, 10.0, token=token)
+            if last is None:
+                resp, target = send_request_with_target(args, payload, 10.0, resolved_target=target)
+                host, port, token, _project_path = target
+            else:
+                resp = send_request(host, port, payload, 10.0, token=token)
         except Exception as e:
             if args.json:
                 print(json.dumps({"success": False, "error": f"transport: {e}"}))
@@ -662,12 +745,17 @@ def cmd_wait_pose_index(args):
         "print(json.dumps({'status': str(status)}))\n"
     )
 
-    host, port, token, _project_path = resolve_target(args)
+    target = resolve_target(args)
+    host, port, token, _project_path = target
     last = None
     while _time.time() < deadline:
         payload = {"id": str(uuid.uuid4()), "script": code, "timeout": 5}
         try:
-            resp = send_request(host, port, payload, 10.0, token=token)
+            if last is None:
+                resp, target = send_request_with_target(args, payload, 10.0, resolved_target=target)
+                host, port, token, _project_path = target
+            else:
+                resp = send_request(host, port, payload, 10.0, token=token)
         except Exception as e:
             if args.json:
                 print(json.dumps({"success": False, "error": f"transport: {e}"}))
@@ -880,7 +968,8 @@ def _execute(args, code: str, mode: str = "exec", src: "str | None" = None) -> i
                    err=f"preflight: {len(errs)} error(s); first: {errs[0].splitlines()[0]}")
             return 3  # 3 = preflight rejection (distinct from 1 = transport, 2 = arg)
 
-    host, port, token, project_path = resolve_target(args)
+    target = resolve_target(args)
+    host, port, token, project_path = target
 
     # Wrap user code so AttributeError messages get enriched with valid-attrs
     # + did-you-mean before reaching the agent's stderr. UE engine API has
@@ -895,7 +984,10 @@ def _execute(args, code: str, mode: str = "exec", src: "str | None" = None) -> i
     }
 
     try:
-        resp = send_request(host, port, payload, args.timeout + 5, token=token)
+        resp, target = send_request_with_target(
+            args, payload, args.timeout + 5, resolved_target=target
+        )
+        host, port, token, project_path = target
     except ConnectionRefusedError:
         msg = (
             f"Cannot connect to {host}:{port}. "
