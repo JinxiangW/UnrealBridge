@@ -140,7 +140,7 @@ Parameters:
 
 ## get_material_function(function_path) -> FBridgeMaterialFunctionInfo
 
-**M1-8.** Full metadata for a single `UMaterialFunction`. Walks the MF's expression list, extracts `UMaterialExpressionFunctionInput` / `UMaterialExpressionFunctionOutput` nodes, sorts by `SortPriority`.
+**M1-8.** Full metadata for a single `UMaterialFunctionInterface` asset. Accepts plain material functions plus layer / blend variants and function-instance assets. Walks the resolved function-expression list, extracts `UMaterialExpressionFunctionInput` / `UMaterialExpressionFunctionOutput` nodes, sorts by `SortPriority`.
 
 ```python
 info = unreal.UnrealBridgeMaterialLibrary.get_material_function(
@@ -177,6 +177,7 @@ for p in info.outputs:
 
 ### Notes
 
+- **Function instances** — `path` stays on the requested asset, but inputs / outputs / expression count are resolved from the base function graph UE compiles against. This is intentional: function instances override parameters, they don't own a separate expression graph.
 - **FText category display** — `library_category` comes from localized `FText`. In non-English UE editor locales the string may render as mojibake in Git Bash / cmd; the value itself is correct. Inspect in Python with `repr()` or write to a file if needed.
 - **Output port types** — intentionally empty in this milestone. M1-2's `get_material_graph` will provide enough graph visibility to resolve output types via upstream tracing; adding type inference here would duplicate work.
 

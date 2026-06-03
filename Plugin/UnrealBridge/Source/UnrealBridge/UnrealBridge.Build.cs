@@ -71,11 +71,15 @@ public class UnrealBridge : ModuleRules
 			"TraceServices",
 		});
 
+		if (Target.Version.MajorVersion > 5 || (Target.Version.MajorVersion == 5 && Target.Version.MinorVersion >= 6))
+		{
+			PrivateDependencyModuleNames.Add("MaterialEditor");
+		}
+
 		if (Target.Version.MajorVersion > 5 || (Target.Version.MajorVersion == 5 && Target.Version.MinorVersion >= 7))
 		{
 			PrivateDependencyModuleNames.AddRange(new string[]
 			{
-				"MaterialEditor",
 				"PoseSearch",
 				"Chooser",
 				"ChooserEditor",

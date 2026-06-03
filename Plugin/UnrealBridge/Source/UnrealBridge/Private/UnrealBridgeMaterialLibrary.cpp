@@ -3,7 +3,7 @@
 #include "Misc/EngineVersionComparison.h"
 #include "UnrealBridgeCompat.h"
 
-#if !UE_VERSION_OLDER_THAN(5, 7, 0)
+#if !UE_VERSION_OLDER_THAN(5, 6, 0)
 
 #include "Materials/Material.h"
 #include "Materials/MaterialInstance.h"
@@ -187,6 +187,36 @@ namespace BridgeMaterialImpl
 		}
 	}
 
+	static UMaterialFunction* ResolveBaseMaterialFunction(UMaterialFunctionInterface* Function)
+	{
+		return Function ? Function->GetBaseFunction() : nullptr;
+	}
+
+	static const UMaterialFunction* ResolveBaseMaterialFunction(const UMaterialFunctionInterface* Function)
+	{
+		return Function ? Function->GetBaseFunction() : nullptr;
+	}
+
+	static void PopulateMaterialFunctionMetadata(
+		const UMaterialFunctionInterface* Function,
+		FString& OutDescription,
+		bool& bOutExposeToLibrary,
+		FString& OutLibraryCategory)
+	{
+		const UMaterialFunction* BaseFunction = ResolveBaseMaterialFunction(Function);
+		if (!BaseFunction)
+		{
+			return;
+		}
+
+		OutDescription = BaseFunction->Description;
+		bOutExposeToLibrary = BaseFunction->bExposeToLibrary != 0;
+		if (BaseFunction->LibraryCategoriesText.Num() > 0)
+		{
+			OutLibraryCategory = BaseFunction->LibraryCategoriesText[0].ToString();
+		}
+	}
+
 	static FString UsageFlagName(EMaterialUsage Usage)
 	{
 		// Mirrors UMaterial::GetUsageName (UE 5.7, Engine/Private/Materials/Material.cpp).
@@ -213,7 +243,11 @@ namespace BridgeMaterialImpl
 			case MATUSAGE_LidarPointCloud:        return TEXT("LidarPointCloud");
 			case MATUSAGE_VirtualHeightfieldMesh: return TEXT("VirtualHeightfieldMesh");
 			case MATUSAGE_Nanite:                 return TEXT("Nanite");
+#if UE_VERSION_OLDER_THAN(5, 7, 0)
+			case MATUSAGE_MaterialCache:          return TEXT("MaterialCache");
+#else
 			case MATUSAGE_Voxels:                 return TEXT("Voxels");
+#endif
 			case MATUSAGE_VolumetricCloud:        return TEXT("VolumetricCloud");
 			case MATUSAGE_HeterogeneousVolumes:   return TEXT("HeterogeneousVolumes");
 			case MATUSAGE_StaticMesh:             return TEXT("StaticMesh");
@@ -438,6 +472,8 @@ TArray<FBridgeMaterialFunctionSummary> UUnrealBridgeMaterialLibrary::ListMateria
 	const FString& PathPrefix,
 	int32 MaxResults)
 {
+	using namespace BridgeMaterialImpl;
+
 	TArray<FBridgeMaterialFunctionSummary> Result;
 
 	FAssetRegistryModule& AssetRegistryModule =
@@ -445,8 +481,8 @@ TArray<FBridgeMaterialFunctionSummary> UUnrealBridgeMaterialLibrary::ListMateria
 	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
 
 	FARFilter Filter;
-	Filter.ClassPaths.Add(UMaterialFunction::StaticClass()->GetClassPathName());
-	Filter.bRecursiveClasses = false;
+	Filter.ClassPaths.Add(UMaterialFunctionInterface::StaticClass()->GetClassPathName());
+	Filter.bRecursiveClasses = true;
 	if (!PathPrefix.IsEmpty())
 	{
 		Filter.PackagePaths.Add(FName(*PathPrefix));
@@ -481,19 +517,23 @@ TArray<FBridgeMaterialFunctionSummary> UUnrealBridgeMaterialLibrary::ListMateria
 				TagValue == TEXT("1");
 		}
 
-		// Only touch the asset if we still need the library category (and list is short, user opted in).
-		if (Summary.bExposeToLibrary && Summary.LibraryCategory.IsEmpty())
+		const bool bNeedsDerivedMetadataLoad =
+			AssetData.AssetClassPath != UMaterialFunction::StaticClass()->GetClassPathName();
+
+		// Instances and layer/blend variants inherit their exposed-library metadata
+		// from the base function, so fall back to loading when tags were sparse
+		// or the asset class is broader than a plain UMaterialFunction.
+		if (bNeedsDerivedMetadataLoad ||
+			Summary.Description.IsEmpty() ||
+			(Summary.bExposeToLibrary && Summary.LibraryCategory.IsEmpty()))
 		{
-			if (UMaterialFunction* MF = Cast<UMaterialFunction>(AssetData.GetAsset()))
+			if (UMaterialFunctionInterface* Function = Cast<UMaterialFunctionInterface>(AssetData.GetAsset()))
 			{
-				if (MF->LibraryCategoriesText.Num() > 0)
-				{
-					Summary.LibraryCategory = MF->LibraryCategoriesText[0].ToString();
-				}
-				if (Summary.Description.IsEmpty())
-				{
-					Summary.Description = MF->Description;
-				}
+				PopulateMaterialFunctionMetadata(
+					Function,
+					Summary.Description,
+					Summary.bExposeToLibrary,
+					Summary.LibraryCategory);
 			}
 		}
 
@@ -509,24 +549,23 @@ FBridgeMaterialFunctionInfo UUnrealBridgeMaterialLibrary::GetMaterialFunction(co
 
 	FBridgeMaterialFunctionInfo Info;
 
-	UMaterialFunction* MF = LoadObject<UMaterialFunction>(nullptr, *FunctionPath);
-	if (!MF)
+	UMaterialFunctionInterface* Function = LoadObject<UMaterialFunctionInterface>(nullptr, *FunctionPath);
+	if (!Function)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge: GetMaterialFunction could not load '%s'"), *FunctionPath);
 		return Info;
 	}
 
 	Info.bFound = true;
-	Info.Name = MF->GetName();
-	Info.Path = MF->GetPathName();
-	Info.Description = MF->Description;
-	Info.bExposeToLibrary = MF->bExposeToLibrary;
-	if (MF->LibraryCategoriesText.Num() > 0)
-	{
-		Info.LibraryCategory = MF->LibraryCategoriesText[0].ToString();
-	}
+	Info.Name = Function->GetName();
+	Info.Path = Function->GetPathName();
+	PopulateMaterialFunctionMetadata(
+		Function,
+		Info.Description,
+		Info.bExposeToLibrary,
+		Info.LibraryCategory);
 
-	const TConstArrayView<TObjectPtr<UMaterialExpression>> Expressions = MF->GetExpressions();
+	const TConstArrayView<TObjectPtr<UMaterialExpression>> Expressions = Function->GetExpressions();
 	Info.NumExpressions = Expressions.Num();
 
 	for (const TObjectPtr<UMaterialExpression>& Expr : Expressions)
@@ -981,12 +1020,16 @@ namespace BridgeMaterialImpl
 		{
 			return nullptr;
 		}
+#if UE_VERSION_OLDER_THAN(5, 7, 0)
+		return MatInterface->GetMaterialResource(FeatureLevel, Quality);
+#else
 		const EShaderPlatform Platform = GShaderPlatformForFeatureLevel[FeatureLevel];
 		if (Platform == SP_NumPlatforms)
 		{
 			return nullptr;
 		}
 		return MatInterface->GetMaterialResource(Platform, Quality);
+#endif
 	}
 
 	/** Local copy of FMaterialStatsUtils::RepresentativeShaderTypeToString — not exported from MaterialEditor. */
@@ -1162,15 +1205,15 @@ FBridgeMaterialGraph UUnrealBridgeMaterialLibrary::GetMaterialGraph(const FStrin
 			}
 		}
 	}
-	else if (UMaterialFunction* MF = Cast<UMaterialFunction>(LoadedObj))
+	else if (UMaterialFunctionInterface* Function = Cast<UMaterialFunctionInterface>(LoadedObj))
 	{
 		Graph.bIsMaterialFunction = true;
-		Expressions = MF->GetExpressions();
+		Expressions = Function->GetExpressions();
 	}
 	else
 	{
 		UE_LOG(LogTemp, Warning,
-			TEXT("UnrealBridge: GetMaterialGraph: '%s' is neither UMaterial nor UMaterialFunction (%s)"),
+			TEXT("UnrealBridge: GetMaterialGraph: '%s' is neither UMaterial nor UMaterialFunctionInterface (%s)"),
 			*MaterialPath, *LoadedObj->GetClass()->GetName());
 		Graph.bFound = false;
 		return Graph;
@@ -5512,4 +5555,4 @@ FBridgeMaterialGraphOpResult UUnrealBridgeMaterialLibrary::SetMaterialAttributeL
 	return Out;
 }
 
-#endif // !UE_VERSION_OLDER_THAN(5, 7, 0)
+#endif // !UE_VERSION_OLDER_THAN(5, 6, 0)

@@ -124,7 +124,7 @@ namespace BridgeMaterialGraphJson
 		FString ResolvedGraphPath;
 		FString BaseMaterialPath;
 		UMaterial* Material = nullptr;
-		UMaterialFunction* Function = nullptr;
+		UMaterialFunctionInterface* Function = nullptr;
 		UMaterialInterface* MaterialInterface = nullptr;
 	};
 
@@ -355,6 +355,18 @@ namespace BridgeMaterialGraphJson
 		return EnumValueName<EMaterialProperty>(Property, TEXT("MP_"));
 	}
 
+	static FString AssetClassName(UObject* Asset)
+	{
+		if (!Asset || !Asset->GetClass())
+		{
+			return TEXT("Unknown");
+		}
+
+		FString Name = Asset->GetClass()->GetName();
+		Name.RemoveFromStart(TEXT("U"));
+		return Name;
+	}
+
 	static FResolvedGraphAsset ResolveMaterialGraphAsset(const FString& MaterialPath)
 	{
 		FResolvedGraphAsset Resolved;
@@ -380,12 +392,13 @@ namespace BridgeMaterialGraphJson
 			return Resolved;
 		}
 
-		if (UMaterialFunction* Function = Cast<UMaterialFunction>(Loaded))
+		if (UMaterialFunctionInterface* Function = Cast<UMaterialFunctionInterface>(Loaded))
 		{
+			UMaterialFunction* BaseFunction = Function->GetBaseFunction();
 			Resolved.bSuccess = true;
-			Resolved.AssetType = TEXT("MaterialFunction");
+			Resolved.AssetType = AssetClassName(Loaded);
 			Resolved.Function = Function;
-			Resolved.ResolvedGraphPath = Function->GetPathName();
+			Resolved.ResolvedGraphPath = BaseFunction ? BaseFunction->GetPathName() : Function->GetPathName();
 			return Resolved;
 		}
 
@@ -428,7 +441,7 @@ namespace BridgeMaterialGraphJson
 		}
 
 		Resolved.Error = FString::Printf(
-			TEXT("'%s' is %s, not UMaterial, UMaterialFunction, or UMaterialInterface"),
+			TEXT("'%s' is %s, not UMaterial, UMaterialFunctionInterface, or UMaterialInterface"),
 			*MaterialPath,
 			*Loaded->GetClass()->GetName());
 		return Resolved;
@@ -738,11 +751,18 @@ namespace BridgeMaterialGraphJson
 			}
 			Snapshot.MaterialObject->SetArrayField(TEXT("shading_models"), ShadingModels);
 		}
-		else if (UMaterialFunction* Function = Snapshot.Asset.Function)
+		else if (UMaterialFunctionInterface* Function = Snapshot.Asset.Function)
 		{
-			Snapshot.MaterialObject->SetStringField(TEXT("description"), Function->Description);
-			Snapshot.MaterialObject->SetStringField(TEXT("user_exposed_caption"), Function->UserExposedCaption);
-			Snapshot.MaterialObject->SetBoolField(TEXT("expose_to_library"), Function->bExposeToLibrary != 0);
+			Snapshot.MaterialObject->SetStringField(TEXT("description"), Function->GetDescription());
+			Snapshot.MaterialObject->SetStringField(TEXT("function_class"), Function->GetClass()->GetName());
+			Snapshot.MaterialObject->SetStringField(
+				TEXT("function_usage"),
+				EnumValueName<EMaterialFunctionUsage>(Function->GetMaterialFunctionUsage(), TEXT("")));
+			if (UMaterialFunction* BaseFunction = Function->GetBaseFunction())
+			{
+				Snapshot.MaterialObject->SetStringField(TEXT("user_exposed_caption"), BaseFunction->UserExposedCaption);
+				Snapshot.MaterialObject->SetBoolField(TEXT("expose_to_library"), BaseFunction->bExposeToLibrary != 0);
+			}
 		}
 	}
 

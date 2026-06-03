@@ -10,20 +10,22 @@ on the older 5.x's.
 This document lists what's gated. The build matrix in `tools/build_matrix.py`
 verifies the gates by compiling the plugin against each engine version.
 
-## Whole-library gates (disappear entirely on 5.4)
+## Whole-library gates (disappear entirely below their listed cutoff)
 
-Each library below is wrapped in `#if !UE_VERSION_OLDER_THAN(5, 7, 0)`. On 5.4
-its `.h` and `.cpp` compile to empty translation units, no `UCLASS` is
-registered, and calling any of its UFUNCTIONs from Python on a 5.4 build will
-fail with "no such function on UnrealBridgeXxxLibrary". Matching ModuleRules
-dependencies are added only on 5.7+ so older projects don't enable plugins for
-libraries that compile to stubs.
+Most libraries below are wrapped in `#if !UE_VERSION_OLDER_THAN(5, 7, 0)`.
+`UnrealBridgeMaterialLibrary` is lower: `#if !UE_VERSION_OLDER_THAN(5, 6, 0)`.
+Below the listed cutoff, the library's `.h` and `.cpp` compile to empty
+translation units, no `UCLASS` is registered, and calling any of its UFUNCTIONs
+from Python on that engine build will fail with "no such function on
+UnrealBridgeXxxLibrary". Matching ModuleRules dependencies are added only on or
+above the same cutoff so older projects don't enable plugins for libraries that
+compile to stubs.
 
 | Library | Reason |
 |---|---|
 | `UnrealBridgeChooserLibrary` | `OutputObjectColumn.h` doesn't exist in 5.4 (added with the Chooser plugin's output-column rewrite); other Chooser internals shifted heavily 5.4 → 5.7 |
 | `UnrealBridgePoseSearchLibrary` | Core API rewritten: `UPoseSearchSchema::GetRoledSkeletons`, `UPoseSearchDatabase::GetNumAnimationAssets` / `GetDatabaseAnimationAsset`, and `FPoseSearchDatabaseAnimationAsset` are all 5.5+ additions |
-| `UnrealBridgeMaterialLibrary` | `EMaterialDomain::MD_*` enum values differ in scope; `MATUSAGE_Voxels` / `MATUSAGE_StaticMesh` don't exist in 5.4 |
+| `UnrealBridgeMaterialLibrary` | Gated at 5.6+. UE 5.4/5.5 miss parts of the material-editor/runtime surface this library uses; 5.6.1 is now compiled with the full implementation |
 | `UnrealBridgeNavigationLibrary` | `ARecastNavMesh::GetDebugGeometryForTile` 2nd arg type changed (`int32` → `FNavTileRef`) and the "default tile = aggregate all" sentinel doesn't exist on 5.4 |
 
 ## Single-UFUNCTION gates (library still works, one function unavailable on 5.4)
@@ -59,11 +61,12 @@ These remain callable on 5.4 — the macro picks the right code path internally.
 #endif
 ```
 
-The 5.7 threshold for the whole-library and single-UFUNCTION gates above
-is conservative — those APIs may work on 5.5 / 5.6 too, but until the
+The 5.7 threshold for most of the whole-library and single-UFUNCTION gates
+above is conservative — those APIs may work on 5.5 / 5.6 too, but until the
 matrix proves a lowered threshold passes BuildPlugin (the gated-IN code
-isn't compiled on 5.5 / 5.6 yet, only the gated-OUT empty stubs are), we
-keep the cutoff at 5.7. Inline shims, by contrast, *are* compiled on
+isn't compiled on those versions yet, only the gated-OUT empty stubs are), we
+keep the cutoff at 5.7. `UnrealBridgeMaterialLibrary` is the first library
+lowered to 5.6 after a targeted compatibility pass. Inline shims, by contrast, *are* compiled on
 every version in the matrix — so each `UE_VERSION_OLDER_THAN(M, m, 0)`
 gate listed in the table above is verified across all Last verified
 versions below.
