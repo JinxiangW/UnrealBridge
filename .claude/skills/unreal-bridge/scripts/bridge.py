@@ -516,6 +516,66 @@ def send_request_with_target(
         )
 
 
+def _int_field(resp: dict, key: str) -> "int | None":
+    try:
+        value = resp.get(key)
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _busy_summary(resp: dict) -> str:
+    if not resp.get("busy"):
+        return ""
+
+    parts = []
+    pending = _int_field(resp, "exec_pending")
+    active = _int_field(resp, "active_clients")
+    max_clients = _int_field(resp, "max_clients")
+    reason = resp.get("busy_reason") or ""
+
+    if pending:
+        parts.append(f"{pending} exec pending/running")
+    if active is not None and max_clients is not None:
+        parts.append(f"clients {active}/{max_clients}")
+    if reason:
+        parts.append(f"reason={reason}")
+    return ", ".join(parts) if parts else "busy"
+
+
+def _transport_error_message(host: str, port: int, exc: Exception) -> str:
+    if isinstance(exc, ConnectionRefusedError):
+        return (
+            f"Cannot connect to {host}:{port}. "
+            "Is Unreal Editor running with UnrealBridge plugin enabled?"
+        )
+
+    text = str(exc) or exc.__class__.__name__
+    if isinstance(exc, TimeoutError):
+        return (
+            f"{text}. The bridge request timed out while connecting or waiting for a response; "
+            "the endpoint may be stale, at the active-client limit, busy with another exec, "
+            "or the GameThread may be blocked. Try `bridge.py ping --json` or "
+            "`bridge.py gamethread-ping` shortly."
+        )
+    if isinstance(exc, (ConnectionError, ConnectionResetError)):
+        return (
+            f"{text}. The bridge endpoint was reached but did not return a full response; "
+            "it may be at the active-client limit, busy with another exec, shutting down, "
+            "or the GameThread may be blocked. Try `bridge.py ping --json` or "
+            "`bridge.py gamethread-ping` shortly."
+        )
+    if isinstance(exc, OSError):
+        return (
+            f"{text}. Bridge transport failed; the endpoint may be stale, at the active-client "
+            "limit, busy with another exec, shutting down, or blocked on the GameThread. "
+            "Try `bridge.py ping --json` or `bridge.py gamethread-ping` shortly."
+        )
+    return text
+
+
 def _recv_all(sock: socket.socket, num_bytes: int) -> bytes:
     chunks = []
     received = 0
@@ -537,21 +597,12 @@ def cmd_ping(args):
         payload = {"id": str(uuid.uuid4()), "command": "ping"}
         resp, target = send_request_with_target(args, payload, args.timeout, resolved_target=target)
         host, port, _token, _project_path = target
-    except ConnectionRefusedError:
-        if args.json:
-            print(json.dumps({"success": False, "error": "Connection refused"}))
-        else:
-            print(
-                f"ERROR: Cannot connect to {host}:{port}. "
-                "Is Unreal Editor running with UnrealBridge plugin enabled?",
-                file=sys.stderr,
-            )
-        return 1
     except Exception as e:
+        msg = _transport_error_message(host, port, e)
         if args.json:
-            print(json.dumps({"success": False, "error": str(e)}))
+            print(json.dumps({"success": False, "error": msg}))
         else:
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {msg}", file=sys.stderr)
         return 1
 
     if args.json:
@@ -559,11 +610,15 @@ def cmd_ping(args):
     else:
         if resp.get("success"):
             ready = resp.get("ready")
-            suffix = ""
+            details = []
             if ready is False:
-                suffix = " (editor still initializing — exec will be rejected)"
+                details.append("editor still initializing; exec will be rejected")
             elif ready is True:
-                suffix = " (ready)"
+                details.append("ready")
+            busy = _busy_summary(resp)
+            if busy:
+                details.append(f"busy: {busy}")
+            suffix = f" ({'; '.join(details)})" if details else ""
             print(f"Connected to UnrealBridge at {host}:{port}{suffix}")
         else:
             print(f"ERROR: {resp.get('error', 'unexpected')}", file=sys.stderr)
@@ -586,10 +641,11 @@ def cmd_gt_ping(args):
         )
         host, port, _token, _project_path = target
     except Exception as e:
+        msg = _transport_error_message(host, port, e)
         if args.json:
-            print(json.dumps({"success": False, "error": str(e)}))
+            print(json.dumps({"success": False, "error": msg}))
         else:
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {msg}", file=sys.stderr)
         return 1
 
     if args.json:
@@ -597,10 +653,12 @@ def cmd_gt_ping(args):
     else:
         state = resp.get("output") or "unknown"
         latency = resp.get("latency_ms")
+        busy = _busy_summary(resp)
+        busy_suffix = f", busy: {busy}" if busy else ""
         if latency is not None:
-            print(f"{state} ({latency:.1f} ms)")
+            print(f"{state} ({latency:.1f} ms{busy_suffix})")
         else:
-            print(state)
+            print(f"{state}{f' ({busy_suffix[2:]})' if busy_suffix else ''}")
         err = resp.get("error")
         if err:
             print(err, file=sys.stderr)
@@ -615,10 +673,11 @@ def cmd_resume(args):
         resp, target = send_request_with_target(args, payload, args.timeout, resolved_target=target)
         host, port, _token, _project_path = target
     except Exception as e:
+        msg = _transport_error_message(host, port, e)
         if args.json:
-            print(json.dumps({"success": False, "error": str(e)}))
+            print(json.dumps({"success": False, "error": msg}))
         else:
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {msg}", file=sys.stderr)
         return 1
 
     if args.json:
@@ -669,10 +728,11 @@ def cmd_wait_compile(args):
             else:
                 resp = send_request(host, port, payload, 10.0, token=token)
         except Exception as e:
+            msg = _transport_error_message(host, port, e)
             if args.json:
-                print(json.dumps({"success": False, "error": f"transport: {e}"}))
+                print(json.dumps({"success": False, "error": f"transport: {msg}"}))
             else:
-                print(f"ERROR: {e}", file=sys.stderr)
+                print(f"ERROR: {msg}", file=sys.stderr)
             return 3
 
         if not resp.get("success"):
@@ -757,10 +817,11 @@ def cmd_wait_pose_index(args):
             else:
                 resp = send_request(host, port, payload, 10.0, token=token)
         except Exception as e:
+            msg = _transport_error_message(host, port, e)
             if args.json:
-                print(json.dumps({"success": False, "error": f"transport: {e}"}))
+                print(json.dumps({"success": False, "error": f"transport: {msg}"}))
             else:
-                print(f"ERROR: {e}", file=sys.stderr)
+                print(f"ERROR: {msg}", file=sys.stderr)
             return 3
 
         if not resp.get("success"):
@@ -988,23 +1049,13 @@ def _execute(args, code: str, mode: str = "exec", src: "str | None" = None) -> i
             args, payload, args.timeout + 5, resolved_target=target
         )
         host, port, token, project_path = target
-    except ConnectionRefusedError:
-        msg = (
-            f"Cannot connect to {host}:{port}. "
-            "Is Unreal Editor running with UnrealBridge plugin enabled?"
-        )
+    except Exception as e:
+        msg = _transport_error_message(host, port, e)
         if args.json:
             print(json.dumps({"success": False, "error": msg}))
         else:
             print(f"ERROR: {msg}", file=sys.stderr)
         _audit(project_path, mode, src, code, ok=False, err=f"transport: {msg}")
-        return 1
-    except Exception as e:
-        if args.json:
-            print(json.dumps({"success": False, "error": str(e)}))
-        else:
-            print(f"ERROR: {e}", file=sys.stderr)
-        _audit(project_path, mode, src, code, ok=False, err=f"transport: {e}")
         return 1
 
     if args.json:
@@ -1017,6 +1068,9 @@ def _execute(args, code: str, mode: str = "exec", src: "str | None" = None) -> i
             print(output, end="" if output.endswith("\n") else "\n")
         if error:
             print(error, file=sys.stderr, end="" if error.endswith("\n") else "\n")
+        busy = _busy_summary(resp)
+        if busy and not resp.get("success") and "bridge busy" not in error.lower():
+            print(f"Bridge busy: {busy}", file=sys.stderr)
 
     ok = bool(resp.get("success"))
     _audit(project_path, mode, src, code,

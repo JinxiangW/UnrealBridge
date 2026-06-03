@@ -196,6 +196,7 @@ void FUnrealBridgeServer::Stop()
 		FExecResult R;
 		R.bSuccess = false;
 		R.Error = TEXT("server shutting down");
+		PendingExecCount.Decrement();
 		Pending->Promise.SetValue(MoveTemp(R));
 	}
 
@@ -251,6 +252,26 @@ void FUnrealBridgeServer::SetEditorReady(bool bReady)
 bool FUnrealBridgeServer::IsEditorReady() const
 {
 	return bEditorReady;
+}
+
+void FUnrealBridgeServer::AddStatusFields(const TSharedPtr<FJsonObject>& Response)
+{
+	if (!Response.IsValid())
+	{
+		return;
+	}
+
+	const int32 PendingExecs = PendingExecCount.GetValue();
+	const int32 Active = ActiveClients.GetValue();
+	const bool bAtClientLimit = Active >= MaxConcurrentClients;
+	const bool bBusy = PendingExecs > 0 || bAtClientLimit;
+
+	Response->SetBoolField(TEXT("busy"), bBusy);
+	Response->SetNumberField(TEXT("exec_pending"), PendingExecs);
+	Response->SetNumberField(TEXT("active_clients"), Active);
+	Response->SetNumberField(TEXT("max_clients"), MaxConcurrentClients);
+	Response->SetStringField(TEXT("busy_reason"),
+		PendingExecs > 0 ? TEXT("exec_queue") : (bAtClientLimit ? TEXT("client_limit") : TEXT("")));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -425,6 +446,7 @@ void FUnrealBridgeServer::HandleClient(FSocket* ClientSocket, const FString& End
 			Response->SetBoolField(TEXT("success"), false);
 			Response->SetStringField(TEXT("output"), TEXT(""));
 			Response->SetStringField(TEXT("error"), TEXT("unauthorized: missing or invalid token"));
+			AddStatusFields(Response);
 
 			FString RespJson;
 			TSharedRef<TJsonWriter<>> RespWriter = TJsonWriterFactory<>::Create(&RespJson);
@@ -599,6 +621,8 @@ void FUnrealBridgeServer::HandleClient(FSocket* ClientSocket, const FString& End
 		}
 	}
 
+	AddStatusFields(Response);
+
 	// Mirror the authoritative Response fields into the call record so
 	// every branch (ping / resume / exec / rejected-not-ready / etc.)
 	// logs consistent success/output/error sizes without bespoke wiring.
@@ -675,6 +699,7 @@ FUnrealBridgeServer::FExecResult FUnrealBridgeServer::EnqueueAndWaitForExec(
 	Pending->RequestId = RequestId;
 
 	TFuture<FExecResult> Future = Pending->Promise.GetFuture();
+	PendingExecCount.Increment();
 	ExecQueue.Enqueue(Pending);
 
 	const bool bReady = Future.WaitFor(FTimespan::FromSeconds(TimeoutSeconds));
@@ -682,7 +707,10 @@ FUnrealBridgeServer::FExecResult FUnrealBridgeServer::EnqueueAndWaitForExec(
 	{
 		FExecResult R;
 		R.bSuccess = false;
-		R.Error = FString::Printf(TEXT("exec timeout after %.1fs"), TimeoutSeconds);
+		R.Error = FString::Printf(
+			TEXT("exec timeout after %.1fs (bridge busy: %d exec request(s) queued or running)"),
+			TimeoutSeconds,
+			PendingExecCount.GetValue());
 		// Leave the promise alone — the ticker will still fulfill it later,
 		// but Pending's shared-ptr means that's safe and leaks nothing.
 		return R;
@@ -709,6 +737,7 @@ bool FUnrealBridgeServer::TickConsumeQueue(float /*DeltaTime*/)
 
 	bExecInFlight = true;
 	FExecResult Result = DoPythonExec(Pending->Script);
+	PendingExecCount.Decrement();
 	Pending->Promise.SetValue(MoveTemp(Result));
 	bExecInFlight = false;
 	return true;

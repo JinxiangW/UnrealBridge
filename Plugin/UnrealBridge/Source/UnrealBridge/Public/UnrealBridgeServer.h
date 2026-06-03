@@ -10,6 +10,8 @@
 #include "Misc/ScopeLock.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 
+class FJsonObject;
+
 /**
  * TCP server that listens for incoming connections and executes Python scripts
  * in the Unreal Editor's Python interpreter.
@@ -121,6 +123,9 @@ private:
 	/** Actual Python exec (GameThread only, called by ticker). */
 	FExecResult DoPythonExec(const FString& Script);
 
+	/** Add queue/client occupancy fields to a JSON response. */
+	void AddStatusFields(const TSharedPtr<FJsonObject>& Response);
+
 	TUniquePtr<FTcpListener> Listener;
 	int32 ListenPort = 0;
 	FString BindAddressStr = TEXT("127.0.0.1");
@@ -131,6 +136,7 @@ private:
 	// Exec pipeline (item #1 of server stability plan).
 	TQueue<TSharedPtr<FPendingExec, ESPMode::ThreadSafe>, EQueueMode::Mpsc> ExecQueue;
 	FTSTicker::FDelegateHandle TickHandle;
+	FThreadSafeCounter PendingExecCount;
 	bool bExecInFlight = false; // GameThread-only, no atomic needed
 
 	// Connection limit (item #5). Atomic because we increment/decrement from
