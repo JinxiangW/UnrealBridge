@@ -15,6 +15,7 @@ If `bridge.py` returns `discovery: no UnrealBridge editors found`, walk these in
 1. **Plugin installed** in `<UEProject>/Plugins/UnrealBridge/` (use `sync_plugin.bat` from this repo; user must edit its `DST=` once). Check: `<UEProject>/Plugins/UnrealBridge/UnrealBridge.uplugin` exists.
 2. **Plugin enabled** — check `<UEProject>/<Project>.uproject` `"Plugins"` block for `{"Name":"UnrealBridge", "Enabled":false}` and flip if present.
 3. **Editor up and ready** — `bridge.py ping` returns `"ready": true`. `false` means MainFrame still loading; wait 10–60s.
+4. **Do not equate ping with exec health.** `ping` is TCP-only. If `ping` succeeds but `exec` times out or hangs, immediately run `bridge.py gamethread-ping`. Report that as **"editor reachable, GameThread unresponsive"**, not "can't connect" / "can't find the editor".
 
 Last resort if multicast is blocked (corp VPN, virtual NIC): `--endpoint=127.0.0.1:<port>` from the editor log line `LogUnrealBridge: Listening on 127.0.0.1:<port>`. Python 3.7+ stdlib only.
 
@@ -54,6 +55,9 @@ Bash(description="Wait for UE editor ready", command=<block above>,
 
 - Grep `"ready": *true` — TCP-up ≠ MainFrame-ready. `success:true, ready:false`
   means `exec` calls will be rejected; ping success alone is not enough.
+- Even `success:true, ready:true` still does **not** prove GameThread health.
+  If the task depends on live `exec` and anything smells off, run one
+  foreground `bridge.py gamethread-ping` before concluding the bridge is usable.
 - Ping FIRST then sleep — no leading sleep (harness blocks long ones).
 - `i % 3` echo gate — caps notifications at ~10 over 5 min so Monitor doesn't
   trip its event-flood auto-stop.
@@ -91,10 +95,13 @@ Optional flags: `--project=<name|path>` (disambiguate when >1 editors run; or en
 ## Workflow
 
 1. **Always ping first.**
-2. **Default to `exec --stdin` heredoc, NOT `exec-file`.** A heredoc is the right mode for ~95% of one-shot work — no temp file to name, no cleanup, prompt stays self-contained, no risk of dangling scripts in `$TEMP` / `.tmp` / project root. **Only reach for `exec-file` when you genuinely intend to re-run the same script multiple times** (iterating on a fix, comparing runs). One-shots like "find X, list Y, build a report" → heredoc. If you find yourself writing `with open("/tmp/foo.py", "w")` followed by `bridge.py exec-file /tmp/foo.py`, stop and rewrite as a heredoc.
-3. `--json` for parseable output.
-4. Exit codes: `0` success · `1` runtime/transport · `2` bad CLI args · `3` AST preflight rejected.
-5. **If `exec` hangs**: from a separate terminal try `gamethread-ping` (high latency = GT mid-exec, queue will drain) or `resume` (BP breakpoint).
+2. **If any `exec` attempt times out, stop calling it "connection failure".**
+   Run `gamethread-ping`; if it reports `unresponsive`, say the bridge is up
+   but the editor's GameThread is hung or blocked.
+3. **Default to `exec --stdin` heredoc, NOT `exec-file`.** A heredoc is the right mode for ~95% of one-shot work — no temp file to name, no cleanup, prompt stays self-contained, no risk of dangling scripts in `$TEMP` / `.tmp` / project root. **Only reach for `exec-file` when you genuinely intend to re-run the same script multiple times** (iterating on a fix, comparing runs). One-shots like "find X, list Y, build a report" → heredoc. If you find yourself writing `with open("/tmp/foo.py", "w")` followed by `bridge.py exec-file /tmp/foo.py`, stop and rewrite as a heredoc.
+4. `--json` for parseable output.
+5. Exit codes: `0` success · `1` runtime/transport · `2` bad CLI args · `3` AST preflight rejected.
+6. **If `exec` hangs**: from a separate terminal try `gamethread-ping` (high latency = GT mid-exec, queue will drain) or `resume` (BP breakpoint).
 
 Multi-line example:
 
@@ -172,6 +179,19 @@ Preflight emits `[WARN]` on known raw-fallback patterns and shows the bridge equ
 
 If you genuinely believe no bridge function covers your case, **ask the user before reaching for raw `unreal.*`**.
 
+## Generate-Usage-Doc
+
+When the user asks for a usage guide, artist-facing note, handoff doc, parameter sheet, or practical summary of a UE asset / tool / system, default to **manual style**, not essay style.
+
+- Lead with directly usable facts: asset path, inputs/outputs, parameters, modes, model/UV requirements, runtime hookup points.
+- Write for the target role. Split runtime-owned params (for example CPD / code-driven inputs) into a separate section and explicitly say artists usually do not need to touch them.
+- Order parameters by usage flow, not graph implementation order. For preview-heavy material docs, list preview controls first.
+- For each parameter, give: default value, what it changes, and any mode limitation.
+- Use compact `symptom -> check` troubleshooting lines.
+- Avoid narrative background, design intent, marketing language, and long theory unless the user asks.
+
+For the template and exact writing rules, read `references/generate-usage-doc.md`.
+
 ## Reference index — read these for usage / traps / workflow patterns
 
 Signatures are now mechanically enforced (preflight). References carry semantic traps, scope warnings, and workflow patterns preflight can't catch.
@@ -195,6 +215,7 @@ Signatures are now mechanically enforced (preflight). References carry semantic 
 | Navigation | `references/bridge-navigation-api.md` | NavMesh OBJ export |
 | Perf snapshots | `references/bridge-perf-api.md` | Structured FPS / GT / RT / GPU / draw calls / mem / UObject histogram |
 | Agent / Gameplay | `references/bridge-gameplay-api.md` | **Mandatory before driving the player pawn** — sticky inputs, camera steering, navmesh path planning. |
+| Generate-Usage-Doc | `references/generate-usage-doc.md` | Read when the user asks for usage guides, artist-facing docs, parameter sheets, practical asset summaries, or handoff-style writeups. |
 | UE Asset / Actor / Material | `references/ue-python-*.md` | Stdlib UE Python helpers (load, list, duplicate, spawn) |
 
 > **Pawn control is non-obvious — read `bridge-gameplay-api.md` first.** Driving the player (sticky `IA_Move`, `apply_look_input`, navigating to a moving target, holding an input over time) has hard constraints a fresh API read won't reveal: `bridge.exec` runs on GameThread so `time.sleep` inside one `exec` freezes the engine and stops the sticky ticker; continuous steering must run from a reactive `register_runtime_timer` callback, not a Python `while` loop; `IA_Move` is camera-relative and the forward-axis convention varies per project. The "Pattern: chase a (possibly moving) target and stop on arrival" section has the working template.

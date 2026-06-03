@@ -102,6 +102,7 @@ The script resolves the editor exe from `--editor-exe` CLI arg → `UNREAL_EDITO
 
 After either loop finishes:
 - `python .claude/skills/unreal-bridge/scripts/bridge.py ping` — confirm the bridge is up.
+- `python .claude/skills/unreal-bridge/scripts/bridge.py gamethread-ping` — confirm the GameThread responds; `ping` alone is TCP-only.
 - `bridge.py exec "import unreal; print(unreal.SystemLibrary.get_project_directory())"` — confirm Python is live.
 - Exercise the feature via `bridge.py exec` or `exec-file` (call the new `unreal.<Library>.<method>()`). Check return values and `LogUnrealBridge` output.
 
